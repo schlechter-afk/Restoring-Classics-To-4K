@@ -66,12 +66,14 @@ class Colorizer(nn.Module):
         # x represents the U and V channels of the image
         u_min, u_max = -0.436, 0.436
         u_channel = x[:, 0].clone()  # (batch_size, 270, 512)
-        u_channel = (u_channel - u_channel.min()) / (u_channel.max() - u_channel.min())
+        u_channel = (u_channel - u_channel.min()) / (u_channel.max() - u_channel.min() + 1e-6)
+        u_channel = u_channel.clamp(0, 1)
         u_channel = (u_channel * (u_max - u_min) + u_min).unsqueeze(1)  # (batch_size, 1, 270, 512)
 
         v_min, v_max = -0.615, 0.615
         v_channel = x[:, 1].clone()  # (batch_size, 270, 512)
-        v_channel = (v_channel - v_channel.min()) / (v_channel.max() - v_channel.min())
+        v_channel = (v_channel - v_channel.min()) / (v_channel.max() - v_channel.min() + 1e-6)
+        v_channel = v_channel.clamp(0, 1)
         v_channel = (v_channel * (v_max - v_min) + v_min).unsqueeze(1)  # (batch_size, 1, 270, 512)
 
         yuv_image = torch.cat((

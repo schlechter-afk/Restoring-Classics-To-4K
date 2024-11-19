@@ -40,7 +40,8 @@ class Upscaler(nn.Module):
         x = self.transposed_conv7(x)             # (batch_size, 3,  2160, 4096)
 
         # Normalize the output so that the final image has values in [0, 1] range
-        x = (x - x.min()) / (x.max() - x.min())
+        x = (x - x.min()) / (x.max() - x.min() + 1e-6)
+        x = x.clamp(0, 1)
 
         return x
 
