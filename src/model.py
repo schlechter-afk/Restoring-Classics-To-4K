@@ -1,21 +1,22 @@
-import gc
+"""Code for the entire model that colorizes and upscales the images."""
+
 import os
-import copy
+import gc
+from math import ceil
 from typing import Tuple, Union
 
 import torch
 from torch import nn, optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
+
+import wandb
 from tqdm import tqdm
-
-import wandb  
-from dotenv import load_dotenv
-
-from colorizer import Colorizer
-from upscaler import Upscaler
-from dataloader import NoisyImageNetDataset  
 from datasets import load_dataset
+
+from upscaler import Upscaler
+from colorizer import Colorizer
+from dataloader import NoisyImageNetDataset
 
 class Restorer(nn.Module):
     """Model that colorizes and upscales the images."""
@@ -34,119 +35,146 @@ class Restorer(nn.Module):
         """Forward pass of the model.
 
         Args:
-            x: The input tensor of shape (batch_size, 1, 270, 512).
+            x: The input tensor of shape (BATCH_SIZE, 1, 270, 512).
 
         Returns:
-            The output tensor of shape (batch_size, 3, 2160, 4096).
+            The output tensor of shape (BATCH_SIZE, 3, 2160, 4096).
         """
-        x = self.colorizer(x)  # (batch_size, 3, 270, 512)
-        x = self.upscaler(x)   # (batch_size, 3, 2160, 4096)
+        x = self.colorizer(x)  # (BATCH_SIZE, 3, 270, 512)
+        x = self.upscaler(x)   # (BATCH_SIZE, 3, 2160, 4096)
 
         return x
 
 if __name__ == "__main__":
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    LR = 1e-4
-    weight_decay = 1e-5
-    scheduler_patience = 2
-    scheduler_factor = 0.5
-    num_epochs = 1  
-    batch_size = 2
-    validation_computation_steps = 50
-    val_batches = 100
-
-    os.environ['HF_DATASETS_CACHE'] = '/scratch/swayam/.cache/huggingface/datasets/'
-
-    load_dotenv()
+    LR                 = 1e-4
+    DEVICE             = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    WANDB_LOG          = True
+    CACHE_DIR          = "/scratch/public_scratch/gp/DIP/ImageNet-1k/"
+    NUM_EPOCHS         = 1
+    BATCH_SIZE         = 8
+    WEIGHT_DECAY       = 1e-3
+    VAL_FREQUENCY      = 10000
+    MAX_VAL_BATCHES    = 1250
+    SCHEDULER_FACTOR   = 0.5
+    SCHEDULER_PATIENCE = 2
+    CHECKPOINT_DIR     = "/scratch/public_scratch/gp/DIP/checkpoints/"
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     model = Restorer().to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=scheduler_patience, factor=scheduler_factor)
-    
-    HF_TOKEN = os.getenv("HF_TOKEN")
+    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=SCHEDULER_PATIENCE, factor=SCHEDULER_FACTOR)
 
-    train_dataset = load_dataset('imagenet-1k', split='train', streaming=True, token=HF_TOKEN)
-    val_dataset = load_dataset('imagenet-1k', split='validation', streaming=True, token=HF_TOKEN)
+    # Make sure to login to HuggingFace before running the code using `huggingface-cli login`
+    # You will have to paste the API key from https://huggingface.co/settings/tokens
+    # This is needed to access the gated ImageNet dataset
 
-    our_train_dataset = NoisyImageNetDataset(train_dataset)
-    our_val_dataset = NoisyImageNetDataset(val_dataset)
+    train_dataset = load_dataset(
+        'imagenet-1k', split='train', streaming=True,
+        cache_dir=CACHE_DIR, trust_remote_code=True
+    ).shuffle()
+    noisy_train_dataset = NoisyImageNetDataset(train_dataset)
+    train_dataloader = DataLoader(noisy_train_dataset, batch_size=BATCH_SIZE, num_workers=5)
 
-    train_dataloader = DataLoader(our_train_dataset, batch_size=batch_size)
-    val_dataloader = DataLoader(our_val_dataset, batch_size=batch_size)
+    val_dataset = load_dataset(
+        'imagenet-1k', split='validation', streaming=True,
+        cache_dir=CACHE_DIR, trust_remote_code=True
+    )
+    noisy_val_dataset = NoisyImageNetDataset(val_dataset)
 
     best_val_loss = float('inf')
-    batch_count = 0
+    batch_count   = 0
 
-    wandb.init(project="RestoringClassicsGlory", name="train_v2")
-    wandb.watch(model, log="all")
+    if WANDB_LOG:
+        wandb.init(project="RestoringClassicsGlory", name="train_final_model")
+        wandb.watch(model, log="all")
 
-    for epoch in range(num_epochs):
+    # From here: https://huggingface.co/datasets/ILSVRC/imagenet-1k#data-splits
+    TRAIN_DATASET_SIZE = 1281167
+    NUM_TRAIN_BATCHES  = ceil(TRAIN_DATASET_SIZE / BATCH_SIZE)
+    for epoch in range(NUM_EPOCHS):
         model.train()
-        pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}")
+        epoch_train_loss = 0.0
+
+        pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}", total=NUM_TRAIN_BATCHES)
         for batch in pbar:
+            pbar.refresh()
             gc.collect()
             torch.cuda.empty_cache()
             optimizer.zero_grad()
 
-            denoised_gray = batch['denoised_gray'].to(DEVICE)   # Shape: (batch_size, 1, 270, 512)
-            original_rgb = batch['original_rgb'].to(DEVICE)     # Shape: (batch_size, 3, 270, 512)
+            denoised_gray = batch['denoised_gray'].to(DEVICE)  # Shape: (BATCH_SIZE, 1, 270, 512)
+            original_rgb  = batch['original_rgb'].to(DEVICE)   # Shape: (BATCH_SIZE, 3, 270, 512)
 
-            y = model(denoised_gray)                            # Shape: (batch_size, 3, 2160, 4096)
+            y = model(denoised_gray)  # Shape: (BATCH_SIZE, 3, 2160, 4096)
 
-            gt = F.interpolate(original_rgb,                    # Shape: (batch_size, 3, 2160, 4096)
-                                size=(2160, 4096), 
-                                mode="bilinear", 
-                                align_corners=False)
+            gt = F.interpolate(
+                original_rgb,
+                size=(2160, 4096),
+                mode="bilinear",
+                align_corners=False
+            )  # Shape: (BATCH_SIZE, 3, 2160, 4096)
 
             loss = nn.MSELoss()(y, gt)
+            epoch_train_loss += loss.item()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             batch_count += 1
 
-            wandb.log({"train_loss": loss.item(), "batch": batch_count})
+            if WANDB_LOG:
+                wandb.log({
+                    "train_loss": loss.item(),
+                    "avg_train_loss": epoch_train_loss / batch_count,
+                })
 
-            pbar.set_postfix_str(f"Epoch: {epoch+1}, Loss: {loss.item():.4f}")
+            pbar.set_postfix_str(f"Avg Train Loss: {epoch_train_loss / batch_count:.4f}")
 
             # Every 10k batches, compute validation loss
-            if batch_count % validation_computation_steps == 0:
+            if batch_count % VAL_FREQUENCY == 0:
                 model.eval()
-                val_losses = []
+                avg_val_loss    = 0.0
                 val_batch_count = 0
-                max_val_batches = val_batches  
+
+                noisy_val_dataset.dataset = noisy_val_dataset.dataset.shuffle()
+                val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
 
                 with torch.no_grad():
                     for val_batch in val_dataloader:
                         val_denoised_gray = val_batch['denoised_gray'].to(DEVICE)
-                        val_original_rgb = val_batch['original_rgb'].to(DEVICE)
+                        val_original_rgb  = val_batch['original_rgb'].to(DEVICE)
 
-                        val_y = model(val_denoised_gray)
-                        val_gt = F.interpolate(val_original_rgb, size=(2160, 4096), mode="bilinear", align_corners=False)
+                        val_y  = model(val_denoised_gray)
+                        val_gt = F.interpolate(
+                            val_original_rgb,
+                            size=(2160, 4096),
+                            mode="bilinear",
+                            align_corners=False
+                        )
 
                         val_loss = nn.MSELoss()(val_y, val_gt)
-                        val_losses.append(val_loss.item())
+                        avg_val_loss += val_loss.item()
 
                         val_batch_count += 1
-                        if val_batch_count >= max_val_batches:
+                        if val_batch_count >= MAX_VAL_BATCHES:
                             break
 
-                avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else float('inf')
+                avg_val_loss = avg_val_loss / val_batch_count if val_batch_count > 0 else float('inf')
 
-                wandb.log({"val_loss": avg_val_loss, "batch": batch_count})
+                if WANDB_LOG:
+                    wandb.log({"val_loss": avg_val_loss})
 
                 print(f"Validation Loss after {batch_count} batches: {avg_val_loss:.4f}")
 
-                scheduler.step(avg_val_loss) 
+                scheduler.step(avg_val_loss)
 
                 if avg_val_loss < best_val_loss:
-
                     best_val_loss = avg_val_loss
 
-                    checkpoint_path = os.path.join("checkpoints", f"model_epoch_{epoch+1}_batch_{batch_count}.pth")
-
-                    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-
+                    checkpoint_path = os.path.join(
+                        CHECKPOINT_DIR,
+                        f"model_epoch_{epoch+1}_batch_{batch_count}.pth"
+                    )
                     torch.save({
                         'epoch': epoch+1,
                         'batch': batch_count,
@@ -155,8 +183,7 @@ if __name__ == "__main__":
                         'loss': avg_val_loss,
                     }, checkpoint_path)
 
-                    print(f"Model saved to {checkpoint_path}")
+                model.train()
 
-                model.train()  # Set back to training mode
-
-    wandb.finish()
+    if WANDB_LOG:
+        wandb.finish()
