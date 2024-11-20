@@ -23,9 +23,12 @@ class Colorizer(nn.Module):
         self.dense_sift = DenseSIFTDescriptor()
 
         self.conv1 = nn.Conv2d(128, 32, kernel_size=5, stride=1, padding=2)
+        self.norm1 = nn.GroupNorm(num_groups=8, num_channels=32)
         self.conv2 = nn.Conv2d(32,   8, kernel_size=3, stride=1, padding=1)
+        self.norm2 = nn.GroupNorm(num_groups=4, num_channels=8)
         self.conv3 = nn.Conv2d(8,    2, kernel_size=5, stride=1, padding=2)
         self.relu  = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.4)
 
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size, kernel_size)
@@ -51,9 +54,11 @@ class Colorizer(nn.Module):
 
         x = self.dense_sift(x)  # (batch_size, 128, 270, 512)
 
-        x = self.relu(self.conv1(x))  # (batch_size, 16, 270, 512)
-        x = self.relu(self.conv2(x))  # (batch_size, 8,  270, 512)
-        x = self.conv3(x)             # (batch_size, 2,  270, 512)
+        x = self.relu(self.norm1(self.conv1(x)))  # (batch_size, 32, 270, 512)
+        x = self.dropout(x)
+        x = self.relu(self.norm2(self.conv2(x)))  # (batch_size, 8,  270, 512)
+        x = self.dropout(x)
+        x = self.conv3(x)                         # (batch_size, 2,  270, 512)
 
         x = joint_bilateral_blur(
             input=x,

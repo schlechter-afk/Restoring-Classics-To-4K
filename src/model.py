@@ -46,7 +46,10 @@ class Restorer(nn.Module):
 
 if __name__ == "__main__":
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    LR = 1e-3
+    LR = 1e-4
+    weight_decay = 1e-5
+    scheduler_patience = 2
+    scheduler_factor = 0.5
     num_epochs = 1  
     batch_size = 2
     validation_computation_steps = 50
@@ -57,7 +60,8 @@ if __name__ == "__main__":
     load_dotenv()
 
     model = Restorer().to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=scheduler_patience, factor=scheduler_factor)
     
     HF_TOKEN = os.getenv("HF_TOKEN")
 
@@ -73,7 +77,7 @@ if __name__ == "__main__":
     best_val_loss = float('inf')
     batch_count = 0
 
-    wandb.init(project="RestoringClassicsGlory", name="train_v1")
+    wandb.init(project="RestoringClassicsGlory", name="train_v2")
     wandb.watch(model, log="all")
 
     for epoch in range(num_epochs):
@@ -96,6 +100,7 @@ if __name__ == "__main__":
 
             loss = nn.MSELoss()(y, gt)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             batch_count += 1
@@ -131,6 +136,8 @@ if __name__ == "__main__":
                 wandb.log({"val_loss": avg_val_loss, "batch": batch_count})
 
                 print(f"Validation Loss after {batch_count} batches: {avg_val_loss:.4f}")
+
+                scheduler.step(avg_val_loss) 
 
                 if avg_val_loss < best_val_loss:
 
