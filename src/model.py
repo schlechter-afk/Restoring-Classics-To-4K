@@ -48,8 +48,8 @@ if __name__ == "__main__":
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     LR = 1e-3
     num_epochs = 1  
-    batch_size = 4
-    validation_computation_steps = 10000
+    batch_size = 2
+    validation_computation_steps = 50
     val_batches = 100
 
     os.environ['HF_DATASETS_CACHE'] = '/scratch/swayam/.cache/huggingface/datasets/'
@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     for epoch in range(num_epochs):
         model.train()
-        pbar = tqdm(train_dataloader)
+        pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}")
         for batch in pbar:
             gc.collect()
             torch.cuda.empty_cache()

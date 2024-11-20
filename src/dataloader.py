@@ -58,10 +58,7 @@ class NoisyImageNetDataset(IterableDataset):
             noise_im = noise_im1 + noise_im2 
             noisy_img = noisy_image + noise_im
 
-            # print(noisy_img.min(), noisy_img.max()) 
             noisy_image = np.clip(noisy_img, 0, 1)
-
-            # noisy_image = np.clip(noisy_img, 0, 255).astype(np.uint8)
             
         return noisy_image
     
@@ -89,6 +86,15 @@ class NoisyImageNetDataset(IterableDataset):
     def __iter__(self):
         for item in self.dataset:
             image = item['image']
+
+            if image.mode == 'L': 
+                # Skip grayscale images
+                continue
+
+            if image.mode == 'RGBA':
+                # Ignore alpha channel
+                image = image.convert('RGB')
+
             image_np = np.array(image)  # Shape: (H, W, 3)
             image_np = cv2.resize(image_np, self.image_size)  # Resize to (512, 270)
 
