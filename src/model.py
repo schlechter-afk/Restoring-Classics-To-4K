@@ -42,24 +42,22 @@ class Restorer(nn.Module):
             The output tensor of shape (BATCH_SIZE, 3, 2160, 4096).
         """
         x = self.colorizer(x, gt)  # (BATCH_SIZE, 3, 270, 512)
-        x = self.upscaler(x)       # (BATCH_SIZE, 3, 2160, 4096)
-
         return x
 
 if __name__ == "__main__":
     LR                 = 1e-4
-    DEVICE             = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    DEVICE             = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     WANDB_LOG          = True
-    CACHE_DIR          = "/scratch/public_scratch/gp/DIP/ImageNet-1k/"
+    CACHE_DIR          = "/scratch/swayam/other_stuff/DIP/ImageNet-1k/"
     NUM_EPOCHS         = 1
-    BATCH_SIZE         = 8
+    BATCH_SIZE         = 16
     WEIGHT_DECAY       = 1e-2
-    VAL_FREQUENCY      = 5000
-    MAX_VAL_BATCHES    = 625
+    VAL_FREQUENCY      = 10
+    MAX_VAL_BATCHES    = 5
     SCHEDULER_FACTOR   = 0.5
     SCHEDULER_PATIENCE = 2
     WANDB_RUN_NAME     = f"colorizer_bug_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}_{MAX_VAL_BATCHES}"
-    CHECKPOINT_DIR     = "/scratch/public_scratch/gp/DIP/checkpoints/"
+    CHECKPOINT_DIR     = "/scratch/swayam/other_stuff/DIP/checkpoints/"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     model = Restorer().to(DEVICE)
@@ -108,15 +106,7 @@ if __name__ == "__main__":
             original_rgb  = batch['original_rgb'].to(DEVICE)   # Shape: (BATCH_SIZE, 3, 270, 512)
 
             y = model(denoised_gray, original_rgb)  # Shape: (BATCH_SIZE, 3, 2160, 4096)
-
-            gt_upscaled = F.interpolate(
-                original_rgb,
-                size=(2160, 4096),
-                mode="bilinear",
-                align_corners=False
-            )  # Shape: (BATCH_SIZE, 3, 2160, 4096)
-
-            loss = nn.MSELoss()(y, gt_upscaled)
+            loss = nn.MSELoss()(y, original_rgb)
             epoch_train_loss += loss.item()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -147,14 +137,7 @@ if __name__ == "__main__":
                         val_original_rgb  = val_batch['original_rgb'].to(DEVICE)
 
                         val_y  = model(val_denoised_gray, val_original_rgb)
-                        val_gt = F.interpolate(
-                            val_original_rgb,
-                            size=(2160, 4096),
-                            mode="bilinear",
-                            align_corners=False
-                        )
-
-                        val_loss = nn.MSELoss()(val_y, val_gt)
+                        val_loss = nn.MSELoss()(val_y, val_original_rgb)
                         avg_val_loss += val_loss.item()
 
                         val_batch_count += 1

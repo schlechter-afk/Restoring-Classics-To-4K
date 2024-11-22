@@ -34,6 +34,9 @@ class Colorizer(nn.Module):
         self.relu  = nn.ReLU()
         self.dropout = nn.Dropout(p=0.4)
 
+        self.skip_conv1 = nn.Conv2d(128, 32, kernel_size=1)
+        self.skip_conv2 = nn.Conv2d(32, 8, kernel_size=1)
+
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size, kernel_size)
         self.kernel_size = kernel_size
@@ -63,12 +66,18 @@ class Colorizer(nn.Module):
         x = self.dropout(x)
         x = self.relu(self.norm2(self.conv2(x)))  # (batch_size, 32,  270, 512)
         x = self.dropout(x)
+        sift_features = self.skip_conv1(
+                            sift_features
+                        ) 
         x += sift_features
         blk1_out = x.clone()
         x = self.relu(self.norm3(self.conv3(x)))  # (batch_size, 16,  270, 512)
         x = self.dropout(x)
         x = self.relu(self.norm4(self.conv4(x)))  # (batch_size, 8,   270, 512)
         x = self.dropout(x)
+        blk1_out = self.skip_conv2(
+                        blk1_out
+                    )
         x += blk1_out
         x = self.conv5(x)                         # (batch_size, 2,   270, 512)
 
