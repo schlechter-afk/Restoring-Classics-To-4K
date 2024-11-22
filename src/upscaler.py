@@ -38,18 +38,26 @@ class Upscaler(nn.Module):
         Returns:
             The output tensor of shape (batch_size, 3, 2160, 4096).
         """
+        original_x = x.clone()
         x = self.relu(self.norm1(self.transposed_conv1(x)))
         x = self.dropout(x)
+        x += F.interpolate(original_x, scale_factor=2, mode="bilinear", align_corners=False)
+        first_2x = x.clone()
         x = self.relu(self.norm2(self.transposed_conv2(x)))
         x = self.dropout(x)
         x = self.relu(self.norm3(self.transposed_conv3(x)))
         x = self.dropout(x)
+        x += first_2x
+        blk1_out = x.clone()
         x = self.relu(self.norm4(self.transposed_conv4(x)))
         x = self.dropout(x)
+        x += F.interpolate(blk1_out, scale_factor=2, mode="bilinear", align_corners=False)
+        second_2x = x.clone()
         x = self.relu(self.norm5(self.transposed_conv5(x)))
         x = self.dropout(x)
         x = self.relu(self.norm6(self.transposed_conv6(x)))
         x = self.dropout(x)
+        x += second_2x
         x = self.transposed_conv7(x)
 
         # Normalize the output so that the final image has values in [0, 1] range

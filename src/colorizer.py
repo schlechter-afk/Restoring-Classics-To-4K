@@ -56,17 +56,20 @@ class Colorizer(nn.Module):
         """
         # original_image represents the luminance values of the image (Y channel)
         original_image = x.clone()
-
+        
         x = self.dense_sift(x)  # (batch_size, 128, 270, 512)
-
+        sift_features = x.clone()
         x = self.relu(self.norm1(self.conv1(x)))  # (batch_size, 64, 270, 512)
         x = self.dropout(x)
         x = self.relu(self.norm2(self.conv2(x)))  # (batch_size, 32,  270, 512)
         x = self.dropout(x)
+        x += sift_features
+        blk1_out = x.clone()
         x = self.relu(self.norm3(self.conv3(x)))  # (batch_size, 16,  270, 512)
         x = self.dropout(x)
         x = self.relu(self.norm4(self.conv4(x)))  # (batch_size, 8,   270, 512)
         x = self.dropout(x)
+        x += blk1_out
         x = self.conv5(x)                         # (batch_size, 2,   270, 512)
 
         yuv_gt = rgb_to_yuv(gt)[:, 1:]  # (batch_size, 2, 270, 512)
