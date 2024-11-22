@@ -29,6 +29,13 @@ class Upscaler(nn.Module):
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(p=0.4)
 
+        # 1x1 Convolutions for Residual Connections
+        self.skip_conv1 = nn.Conv2d(3, 8, kernel_size=1)    # For first residual connection
+        self.skip_conv2 = nn.Conv2d(8, 32, kernel_size=1)   # For second residual connection
+        self.skip_conv3 = nn.Conv2d(32, 64, kernel_size=1)  # For third residual connection
+        self.skip_conv4 = nn.Conv2d(64, 8, kernel_size=1)   # For fourth residual connection
+        
+
     def forward(self, x: torch.tensor) -> torch.tensor:
         """Forward pass of the model.
 
@@ -39,25 +46,59 @@ class Upscaler(nn.Module):
             The output tensor of shape (batch_size, 3, 2160, 4096).
         """
         original_x = x.clone()
+
         x = self.relu(self.norm1(self.transposed_conv1(x)))
         x = self.dropout(x)
-        x += F.interpolate(original_x, scale_factor=2, mode="bilinear", align_corners=False)
+        # skip_conv1_out = self.skip_conv1(
+        #                     F.interpolate(
+        #                         original_x, 
+        #                         scale_factor=2, 
+        #                         mode="bilinear", 
+        #                         align_corners=False
+        #                     )
+        #                 )
+        skip_conv1_out = F.interpolate(
+                            self.skip_conv1(original_x), 
+                            scale_factor=2,
+                            mode="bilinear",
+                            align_corners=False
+                        )
+        x += skip_conv1_out
         first_2x = x.clone()
+
         x = self.relu(self.norm2(self.transposed_conv2(x)))
         x = self.dropout(x)
         x = self.relu(self.norm3(self.transposed_conv3(x)))
         x = self.dropout(x)
-        x += first_2x
+        skip_conv2_out = self.skip_conv2(first_2x)
+        x += skip_conv2_out
         blk1_out = x.clone()
+
         x = self.relu(self.norm4(self.transposed_conv4(x)))
         x = self.dropout(x)
-        x += F.interpolate(blk1_out, scale_factor=2, mode="bilinear", align_corners=False)
+        # skip_conv3_out = self.skip_conv3(
+        #                     F.interpolate(
+        #                         blk1_out, 
+        #                         scale_factor=2, 
+        #                         mode="bilinear", 
+        #                         align_corners=False
+        #                     )
+        #                 )
+        skip_conv3_out = F.interpolate(
+                            self.skip_conv3(blk1_out), 
+                            scale_factor=2,
+                            mode="bilinear",
+                            align_corners=False
+                        )
+        x += skip_conv3_out
         second_2x = x.clone()
+
         x = self.relu(self.norm5(self.transposed_conv5(x)))
         x = self.dropout(x)
         x = self.relu(self.norm6(self.transposed_conv6(x)))
         x = self.dropout(x)
-        x += second_2x
+        skip_conv4_out = self.skip_conv4(second_2x)
+        x += skip_conv4_out
         x = self.transposed_conv7(x)
 
         # Normalize the output so that the final image has values in [0, 1] range
