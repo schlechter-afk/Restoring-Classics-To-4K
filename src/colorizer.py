@@ -6,7 +6,7 @@ from typing import Tuple, Union
 import torch
 from torch import nn, optim
 from tqdm import tqdm
-from kornia.color import yuv_to_rgb
+from kornia.color import yuv_to_rgb, rgb_to_yuv
 from kornia.feature import DenseSIFTDescriptor
 from kornia.filters import joint_bilateral_blur
 
@@ -22,11 +22,15 @@ class Colorizer(nn.Module):
 
         self.dense_sift = DenseSIFTDescriptor()
 
-        self.conv1 = nn.Conv2d(128, 32, kernel_size=5, stride=1, padding=2)
-        self.norm1 = nn.GroupNorm(num_groups=8, num_channels=32)
-        self.conv2 = nn.Conv2d(32,   8, kernel_size=3, stride=1, padding=1)
-        self.norm2 = nn.GroupNorm(num_groups=4, num_channels=8)
-        self.conv3 = nn.Conv2d(8,    2, kernel_size=5, stride=1, padding=2)
+        self.conv1 = nn.Conv2d(128, 64, kernel_size=5, stride=1, padding=2)
+        self.norm1 = nn.GroupNorm(num_groups=8, num_channels=64)
+        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1)
+        self.norm2 = nn.GroupNorm(num_groups=8, num_channels=32)
+        self.conv3 = nn.Conv2d(32, 16, kernel_size=3, stride=1, padding=1)
+        self.norm3 = nn.GroupNorm(num_groups=4, num_channels=16)
+        self.conv4 = nn.Conv2d(16, 8, kernel_size=3, stride=1, padding=1)
+        self.norm4 = nn.GroupNorm(num_groups=4, num_channels=8)
+        self.conv5 = nn.Conv2d(8, 2, kernel_size=3, stride=1, padding=1)
         self.relu  = nn.ReLU()
         self.dropout = nn.Dropout(p=0.4)
 
@@ -40,11 +44,12 @@ class Colorizer(nn.Module):
             sigma_space = (sigma_space, sigma_space)
         self.sigma_space = sigma_space
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         """Forward pass of the model.
 
         Args:
             x: The input tensor of shape (batch_size, 1, 270, 512).
+            gt: The ground truth tensor of shape (batch_size, 3, 270, 512).
 
         Returns:
             The output tensor of shape (batch_size, 3, 270, 512).
@@ -54,15 +59,21 @@ class Colorizer(nn.Module):
 
         x = self.dense_sift(x)  # (batch_size, 128, 270, 512)
 
-        x = self.relu(self.norm1(self.conv1(x)))  # (batch_size, 32, 270, 512)
+        x = self.relu(self.norm1(self.conv1(x)))  # (batch_size, 64, 270, 512)
         x = self.dropout(x)
-        x = self.relu(self.norm2(self.conv2(x)))  # (batch_size, 8,  270, 512)
+        x = self.relu(self.norm2(self.conv2(x)))  # (batch_size, 32,  270, 512)
         x = self.dropout(x)
-        x = self.conv3(x)                         # (batch_size, 2,  270, 512)
+        x = self.relu(self.norm3(self.conv3(x)))  # (batch_size, 16,  270, 512)
+        x = self.dropout(x)
+        x = self.relu(self.norm4(self.conv4(x)))  # (batch_size, 8,   270, 512)
+        x = self.dropout(x)
+        x = self.conv5(x)                         # (batch_size, 2,   270, 512)
+
+        yuv_gt = rgb_to_yuv(gt)[:, 1:]  # (batch_size, 2, 270, 512)
 
         x = joint_bilateral_blur(
             input=x,
-            guidance=original_image.repeat(1, 2, 1, 1),
+            guidance=yuv_gt,
             kernel_size=self.kernel_size,
             sigma_color=self.sigma_color,
             sigma_space=self.sigma_space
@@ -101,11 +112,11 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
         optimizer.zero_grad()
 
-        batch = torch.rand(16, 1, 270, 512).to(DEVICE)
-        y = model(batch)
+        batch   = torch.rand(16, 1, 270, 512).to(DEVICE)
+        rand_gt = torch.rand(16, 3, 270, 512).to(DEVICE)
 
-        gt = torch.rand(16, 3, 270, 512).to(DEVICE)
+        y = model(batch, rand_gt)
 
-        loss = nn.MSELoss()(y, gt)
+        loss = nn.MSELoss()(y, rand_gt)
         pbar.set_postfix_str(f"Loss: {loss.item():.4f}")
         loss.backward()

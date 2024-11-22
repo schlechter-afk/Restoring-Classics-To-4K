@@ -29,7 +29,7 @@ class Upscaler(nn.Module):
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(p=0.4)
 
-    def forward(self, x):
+    def forward(self, x: torch.tensor) -> torch.tensor:
         """Forward pass of the model.
 
         Args:

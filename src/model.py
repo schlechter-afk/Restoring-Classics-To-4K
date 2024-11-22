@@ -31,17 +31,18 @@ class Restorer(nn.Module):
         self.colorizer = Colorizer(kernel_size, sigma_color, sigma_space)
         self.upscaler = Upscaler()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         """Forward pass of the model.
 
         Args:
             x: The input tensor of shape (BATCH_SIZE, 1, 270, 512).
+            gt: The ground truth tensor of shape (BATCH_SIZE, 3, 270, 512).
 
         Returns:
             The output tensor of shape (BATCH_SIZE, 3, 2160, 4096).
         """
-        x = self.colorizer(x)  # (BATCH_SIZE, 3, 270, 512)
-        x = self.upscaler(x)   # (BATCH_SIZE, 3, 2160, 4096)
+        x = self.colorizer(x, gt)  # (BATCH_SIZE, 3, 270, 512)
+        x = self.upscaler(x)       # (BATCH_SIZE, 3, 2160, 4096)
 
         return x
 
@@ -52,11 +53,12 @@ if __name__ == "__main__":
     CACHE_DIR          = "/scratch/public_scratch/gp/DIP/ImageNet-1k/"
     NUM_EPOCHS         = 1
     BATCH_SIZE         = 8
-    WEIGHT_DECAY       = 1e-3
-    VAL_FREQUENCY      = 10000
-    MAX_VAL_BATCHES    = 1250
+    WEIGHT_DECAY       = 1e-2
+    VAL_FREQUENCY      = 5000
+    MAX_VAL_BATCHES    = 625
     SCHEDULER_FACTOR   = 0.5
     SCHEDULER_PATIENCE = 2
+    WANDB_RUN_NAME     = f"colorizer_bug_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}_{MAX_VAL_BATCHES}"
     CHECKPOINT_DIR     = "/scratch/public_scratch/gp/DIP/checkpoints/"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -85,7 +87,7 @@ if __name__ == "__main__":
     batch_count   = 0
 
     if WANDB_LOG:
-        wandb.init(project="RestoringClassicsGlory", name="train_final_model")
+        wandb.init(project="RestoringClassicsGlory", name=WANDB_RUN_NAME)
         wandb.watch(model, log="all")
 
     # From here: https://huggingface.co/datasets/ILSVRC/imagenet-1k#data-splits
@@ -105,16 +107,16 @@ if __name__ == "__main__":
             denoised_gray = batch['denoised_gray'].to(DEVICE)  # Shape: (BATCH_SIZE, 1, 270, 512)
             original_rgb  = batch['original_rgb'].to(DEVICE)   # Shape: (BATCH_SIZE, 3, 270, 512)
 
-            y = model(denoised_gray)  # Shape: (BATCH_SIZE, 3, 2160, 4096)
+            y = model(denoised_gray, original_rgb)  # Shape: (BATCH_SIZE, 3, 2160, 4096)
 
-            gt = F.interpolate(
+            gt_upscaled = F.interpolate(
                 original_rgb,
                 size=(2160, 4096),
                 mode="bilinear",
                 align_corners=False
             )  # Shape: (BATCH_SIZE, 3, 2160, 4096)
 
-            loss = nn.MSELoss()(y, gt)
+            loss = nn.MSELoss()(y, gt_upscaled)
             epoch_train_loss += loss.item()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -144,7 +146,7 @@ if __name__ == "__main__":
                         val_denoised_gray = val_batch['denoised_gray'].to(DEVICE)
                         val_original_rgb  = val_batch['original_rgb'].to(DEVICE)
 
-                        val_y  = model(val_denoised_gray)
+                        val_y  = model(val_denoised_gray, val_original_rgb)
                         val_gt = F.interpolate(
                             val_original_rgb,
                             size=(2160, 4096),
@@ -173,7 +175,7 @@ if __name__ == "__main__":
 
                     checkpoint_path = os.path.join(
                         CHECKPOINT_DIR,
-                        f"model_epoch_{epoch+1}_batch_{batch_count}.pth"
+                        f"{WANDB_RUN_NAME}_epoch_{epoch+1}_batch_{batch_count}.pth"
                     )
                     torch.save({
                         'epoch': epoch+1,
