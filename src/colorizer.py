@@ -47,69 +47,51 @@ class Colorizer(nn.Module):
             sigma_space = (sigma_space, sigma_space)
         self.sigma_space = sigma_space
 
-    def forward(self, x: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass of the model.
 
         Args:
             x: The input tensor of shape (batch_size, 1, 270, 512).
-            gt: The ground truth tensor of shape (batch_size, 3, 270, 512).
 
         Returns:
-            The output tensor of shape (batch_size, 3, 270, 512).
+            The output tensor of shape (batch_size, 2, 270, 512).
         """
         # original_image represents the luminance values of the image (Y channel)
         original_image = x.clone()
-        
+
         x = self.dense_sift(x)  # (batch_size, 128, 270, 512)
         sift_features = x.clone()
-        x = self.relu(self.norm1(self.conv1(x)))  # (batch_size, 64, 270, 512)
+        x = self.relu(self.norm1(self.conv1(x)))        # (batch_size, 64, 270, 512)
         x = self.dropout(x)
-        x = self.relu(self.norm2(self.conv2(x)))  # (batch_size, 32,  270, 512)
+        x = self.relu(self.norm2(self.conv2(x)))        # (batch_size, 32, 270, 512)
         x = self.dropout(x)
-        sift_features = self.skip_conv1(
-                            sift_features
-                        ) 
+        sift_features = self.skip_conv1(sift_features)  # (batch_size, 32, 270, 512)
         x += sift_features
         blk1_out = x.clone()
-        x = self.relu(self.norm3(self.conv3(x)))  # (batch_size, 16,  270, 512)
+        x = self.relu(self.norm3(self.conv3(x)))        # (batch_size, 16, 270, 512)
         x = self.dropout(x)
-        x = self.relu(self.norm4(self.conv4(x)))  # (batch_size, 8,   270, 512)
+        x = self.relu(self.norm4(self.conv4(x)))        # (batch_size, 8,  270, 512)
         x = self.dropout(x)
-        blk1_out = self.skip_conv2(
-                        blk1_out
-                    )
+        blk1_out = self.skip_conv2(blk1_out)            # (batch_size, 8,  270, 512)
         x += blk1_out
-        x = self.conv5(x)                         # (batch_size, 2,   270, 512)
-
-        yuv_gt = rgb_to_yuv(gt)[:, 1:]  # (batch_size, 2, 270, 512)
+        x = self.conv5(x)                               # (batch_size, 2,  270, 512)
 
         x = joint_bilateral_blur(
             input=x,
-            guidance=yuv_gt,
+            guidance=original_image.repeat(1, 2, 1, 1),
             kernel_size=self.kernel_size,
             sigma_color=self.sigma_color,
             sigma_space=self.sigma_space
         )  # (batch_size, 2, 270, 512)
 
-        # x represents the U and V channels of the image
-        u_min, u_max = -0.436, 0.436
-        u_channel = x[:, 0].clone()  # (batch_size, 270, 512)
-        u_channel = (u_channel - u_channel.min()) / (u_channel.max() - u_channel.min() + 1e-6)
-        u_channel = u_channel.clamp(0, 1)
-        u_channel = (u_channel * (u_max - u_min) + u_min).unsqueeze(1)  # (batch_size, 1, 270, 512)
+        u_max = 0.436
+        v_max = 0.615
+        x = torch.tanh(x)
+        scale_tensor = torch.tensor([u_max, v_max], device=x.device)
+        x = x * scale_tensor.view(1, 2, 1, 1)
 
-        v_min, v_max = -0.615, 0.615
-        v_channel = x[:, 1].clone()  # (batch_size, 270, 512)
-        v_channel = (v_channel - v_channel.min()) / (v_channel.max() - v_channel.min() + 1e-6)
-        v_channel = v_channel.clamp(0, 1)
-        v_channel = (v_channel * (v_max - v_min) + v_min).unsqueeze(1)  # (batch_size, 1, 270, 512)
-
-        yuv_image = torch.cat((
-            original_image, u_channel, v_channel
-        ), dim=1)  # (batch_size, 3, 270, 512)
-
-        rgb_image = yuv_to_rgb(yuv_image)  # (batch_size, 3, 270, 512)
-        return rgb_image  # Values in the range [0, 1]
+        return x
 
 if __name__ == "__main__":
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -127,7 +109,7 @@ if __name__ == "__main__":
         batch   = torch.rand(16, 1, 270, 512).to(DEVICE)
         rand_gt = torch.rand(16, 3, 270, 512).to(DEVICE)
 
-        y = model(batch, rand_gt)
+        y = model(batch)
 
         loss = nn.MSELoss()(y, rand_gt)
         pbar.set_postfix_str(f"Loss: {loss.item():.4f}")

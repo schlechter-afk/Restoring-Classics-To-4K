@@ -13,8 +13,8 @@ from torch.utils.data import DataLoader
 import wandb
 from tqdm import tqdm
 from datasets import load_dataset
+from kornia.color import yuv_to_rgb, rgb_to_yuv
 
-from upscaler import Upscaler
 from colorizer import Colorizer
 from dataloader import NoisyImageNetDataset
 
@@ -29,34 +29,32 @@ class Restorer(nn.Module):
         super().__init__()
 
         self.colorizer = Colorizer(kernel_size, sigma_color, sigma_space)
-        self.upscaler = Upscaler()
 
-    def forward(self, x: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass of the model.
 
         Args:
             x: The input tensor of shape (BATCH_SIZE, 1, 270, 512).
-            gt: The ground truth tensor of shape (BATCH_SIZE, 3, 270, 512).
-
         Returns:
-            The output tensor of shape (BATCH_SIZE, 3, 2160, 4096).
+            - uv_channels: The predicted UV channels of shape (BATCH_SIZE, 2, 270, 512).
         """
-        x = self.colorizer(x, gt)  # (BATCH_SIZE, 3, 270, 512)
-        return x
+        uv_channels = self.colorizer(x)  # Shape: (BATCH_SIZE, 2, 270, 512)
+        return uv_channels
+
 
 if __name__ == "__main__":
     LR                 = 1e-4
-    DEVICE             = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    DEVICE             = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     WANDB_LOG          = True
     CACHE_DIR          = "/scratch/swayam/other_stuff/DIP/ImageNet-1k/"
     NUM_EPOCHS         = 1
     BATCH_SIZE         = 16
     WEIGHT_DECAY       = 1e-2
-    VAL_FREQUENCY      = 10
-    MAX_VAL_BATCHES    = 5
-    SCHEDULER_FACTOR   = 0.5
+    VAL_FREQUENCY      = 2500
+    SCHEDULER_FACTOR   = 0.8
     SCHEDULER_PATIENCE = 2
-    WANDB_RUN_NAME     = f"colorizer_bug_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}_{MAX_VAL_BATCHES}"
+    WANDB_RUN_NAME     = f"full_val_scale_fix_uv_colorizer_bug_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}"
     CHECKPOINT_DIR     = "/scratch/swayam/other_stuff/DIP/checkpoints/"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -80,6 +78,7 @@ if __name__ == "__main__":
         cache_dir=CACHE_DIR, trust_remote_code=True
     )
     noisy_val_dataset = NoisyImageNetDataset(val_dataset)
+    val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
 
     best_val_loss = float('inf')
     batch_count   = 0
@@ -105,8 +104,11 @@ if __name__ == "__main__":
             denoised_gray = batch['denoised_gray'].to(DEVICE)  # Shape: (BATCH_SIZE, 1, 270, 512)
             original_rgb  = batch['original_rgb'].to(DEVICE)   # Shape: (BATCH_SIZE, 3, 270, 512)
 
-            y = model(denoised_gray, original_rgb)  # Shape: (BATCH_SIZE, 3, 2160, 4096)
-            loss = nn.MSELoss()(y, original_rgb)
+            uv_channels = model(denoised_gray)  # Shape: (BATCH_SIZE, 2, 270, 512)
+
+            original_yuv = rgb_to_yuv(original_rgb)
+            loss = nn.MSELoss()(uv_channels, original_yuv[:, 1:])
+
             epoch_train_loss += loss.item()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -128,21 +130,17 @@ if __name__ == "__main__":
                 avg_val_loss    = 0.0
                 val_batch_count = 0
 
-                noisy_val_dataset.dataset = noisy_val_dataset.dataset.shuffle()
-                val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
-
                 with torch.no_grad():
                     for val_batch in val_dataloader:
                         val_denoised_gray = val_batch['denoised_gray'].to(DEVICE)
                         val_original_rgb  = val_batch['original_rgb'].to(DEVICE)
 
-                        val_y  = model(val_denoised_gray, val_original_rgb)
-                        val_loss = nn.MSELoss()(val_y, val_original_rgb)
+                        val_uv_channels = model(val_denoised_gray)
+                        val_yuv = rgb_to_yuv(val_original_rgb)
+                        val_loss = nn.MSELoss()(val_uv_channels, val_yuv[:, 1:])
                         avg_val_loss += val_loss.item()
 
                         val_batch_count += 1
-                        if val_batch_count >= MAX_VAL_BATCHES:
-                            break
 
                 avg_val_loss = avg_val_loss / val_batch_count if val_batch_count > 0 else float('inf')
 
