@@ -34,7 +34,6 @@ class Upscaler(nn.Module):
         self.skip_conv2 = nn.Conv2d(8, 32, kernel_size=1)   # For second residual connection
         self.skip_conv3 = nn.Conv2d(32, 64, kernel_size=1)  # For third residual connection
         self.skip_conv4 = nn.Conv2d(64, 8, kernel_size=1)   # For fourth residual connection
-        
 
     def forward(self, x: torch.tensor) -> torch.tensor:
         """Forward pass of the model.
@@ -51,14 +50,14 @@ class Upscaler(nn.Module):
         x = self.dropout(x)
         # skip_conv1_out = self.skip_conv1(
         #                     F.interpolate(
-        #                         original_x, 
-        #                         scale_factor=2, 
-        #                         mode="bilinear", 
+        #                         original_x,
+        #                         scale_factor=2,
+        #                         mode="bilinear",
         #                         align_corners=False
         #                     )
         #                 )
         skip_conv1_out = F.interpolate(
-                            self.skip_conv1(original_x), 
+                            self.skip_conv1(original_x),
                             scale_factor=2,
                             mode="bilinear",
                             align_corners=False
@@ -78,14 +77,14 @@ class Upscaler(nn.Module):
         x = self.dropout(x)
         # skip_conv3_out = self.skip_conv3(
         #                     F.interpolate(
-        #                         blk1_out, 
-        #                         scale_factor=2, 
-        #                         mode="bilinear", 
+        #                         blk1_out,
+        #                         scale_factor=2,
+        #                         mode="bilinear",
         #                         align_corners=False
         #                     )
         #                 )
         skip_conv3_out = F.interpolate(
-                            self.skip_conv3(blk1_out), 
+                            self.skip_conv3(blk1_out),
                             scale_factor=2,
                             mode="bilinear",
                             align_corners=False

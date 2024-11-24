@@ -102,7 +102,10 @@ class NoisyImageNetDataset(IterableDataset):
                 image_np = image_np.astype(np.uint8)
 
             original_rgb = image_np.transpose(2, 0, 1)  # Shape: (3, H, W)
-            image_gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+            # image_gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+
+            # image_gray is obtained by converting RGB to YUV and taking the Y channel
+            image_gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2YUV)[:, :, 0]
 
             original_rgb = original_rgb.astype(np.float32) / 255.0
             image_gray = image_gray.astype(np.float32) / 255.0
@@ -113,8 +116,9 @@ class NoisyImageNetDataset(IterableDataset):
 
             original_rgb_tensor = torch.FloatTensor(original_rgb)
             denoised_image_tensor = torch.FloatTensor(denoised_image).unsqueeze(0)
+            image_gray_tensor = torch.FloatTensor(image_gray).unsqueeze(0)
 
             yield {
                 'original_rgb': original_rgb_tensor,
-                'denoised_gray': denoised_image_tensor,
+                'denoised_gray': image_gray_tensor,
             }

@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 import wandb
 from tqdm import tqdm
 from datasets import load_dataset
+from kornia.color import yuv_to_rgb, rgb_to_yuv
 
 from upscaler import Upscaler
 from colorizer import Colorizer
@@ -29,36 +30,61 @@ class Restorer(nn.Module):
         super().__init__()
 
         self.colorizer = Colorizer(kernel_size, sigma_color, sigma_space)
-        self.upscaler = Upscaler()
+        self.upscaler  = Upscaler()
 
-    def forward(self, x: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass of the model.
 
         Args:
             x: The input tensor of shape (BATCH_SIZE, 1, 270, 512).
-            gt: The ground truth tensor of shape (BATCH_SIZE, 3, 270, 512).
 
         Returns:
-            The output tensor of shape (BATCH_SIZE, 3, 2160, 4096).
+            A tuple containing:
+            - uv_channels: The predicted UV channels of shape (BATCH_SIZE, 2, 270, 512).
+            - upscaled_rgb_image: The upscaled RGB image of shape (BATCH_SIZE, 3, 2160, 4096).
         """
-        x = self.colorizer(x, gt)  # (BATCH_SIZE, 3, 270, 512)
-        x = self.upscaler(x)       # (BATCH_SIZE, 3, 2160, 4096)
+        original_image = x.clone().detach()
+        pred_uv_channels = self.colorizer(x)  # (BATCH_SIZE, 2, 270, 512)
 
-        return x
+        rgb_image = self.uv_to_rgb(
+            original_image,
+            pred_uv_channels.clone().detach()
+        )  # (BATCH_SIZE, 3, 270, 512)
+
+        upscaled_rgb_image = self.upscaler(rgb_image)  # (BATCH_SIZE, 3, 2160, 4096)
+        return pred_uv_channels, upscaled_rgb_image
+
+
+    @staticmethod
+    def uv_to_rgb(y: torch.Tensor, uv: torch.Tensor) -> torch.Tensor:
+        """Converts the YUV channels to RGB channels.
+
+        Args:
+            y: The Y channel of shape (BATCH_SIZE, 1, 270, 512).
+            uv: The UV channels of shape (BATCH_SIZE, 2, 270, 512).
+
+        Returns:
+            The RGB image of shape (BATCH_SIZE, 3, 270, 512).
+        """
+        yuv_image = torch.cat((y, uv), dim=1)
+        return yuv_to_rgb(yuv_image)
+
 
 if __name__ == "__main__":
     LR                 = 1e-4
-    DEVICE             = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    DEVICE             = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     WANDB_LOG          = True
     CACHE_DIR          = "/scratch/public_scratch/gp/DIP/ImageNet-1k/"
     NUM_EPOCHS         = 1
-    BATCH_SIZE         = 8
+    BATCH_SIZE         = 4
     WEIGHT_DECAY       = 1e-2
     VAL_FREQUENCY      = 5000
-    MAX_VAL_BATCHES    = 625
-    SCHEDULER_FACTOR   = 0.5
+    SCHEDULER_FACTOR   = 0.8
     SCHEDULER_PATIENCE = 2
-    WANDB_RUN_NAME     = f"colorizer_bug_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}_{MAX_VAL_BATCHES}"
+    COLORIZER_WEIGHT   = 0.75
+    UPSCALER_WEIGHT    = 1 - COLORIZER_WEIGHT
+    WANDB_RUN_NAME     = f"single_backward_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}"
     CHECKPOINT_DIR     = "/scratch/public_scratch/gp/DIP/checkpoints/"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -82,6 +108,7 @@ if __name__ == "__main__":
         cache_dir=CACHE_DIR, trust_remote_code=True
     )
     noisy_val_dataset = NoisyImageNetDataset(val_dataset)
+    val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
 
     best_val_loss = float('inf')
     batch_count   = 0
@@ -95,7 +122,9 @@ if __name__ == "__main__":
     NUM_TRAIN_BATCHES  = ceil(TRAIN_DATASET_SIZE / BATCH_SIZE)
     for epoch in range(NUM_EPOCHS):
         model.train()
-        epoch_train_loss = 0.0
+        epoch_train_loss     = 0.0
+        epoch_colorizer_loss = 0.0
+        epoch_upscaler_loss  = 0.0
 
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}", total=NUM_TRAIN_BATCHES)
         for batch in pbar:
@@ -107,7 +136,14 @@ if __name__ == "__main__":
             denoised_gray = batch['denoised_gray'].to(DEVICE)  # Shape: (BATCH_SIZE, 1, 270, 512)
             original_rgb  = batch['original_rgb'].to(DEVICE)   # Shape: (BATCH_SIZE, 3, 270, 512)
 
-            y = model(denoised_gray, original_rgb)  # Shape: (BATCH_SIZE, 3, 2160, 4096)
+            uv_channels, rgb_upscaled = model(denoised_gray)
+
+            original_yuv = rgb_to_yuv(original_rgb)
+            colorizer_loss = nn.MSELoss()(uv_channels, original_yuv[:, 1:])
+            epoch_colorizer_loss += colorizer_loss.item()
+            # colorizer_loss.backward(retain_graph=True)
+            # torch.nn.utils.clip_grad_norm_(model.colorizer.parameters(), max_norm=1.0)
+            # optimizer.step()
 
             gt_upscaled = F.interpolate(
                 original_rgb,
@@ -115,9 +151,15 @@ if __name__ == "__main__":
                 mode="bilinear",
                 align_corners=False
             )  # Shape: (BATCH_SIZE, 3, 2160, 4096)
+            upscaler_loss = nn.MSELoss()(rgb_upscaled, gt_upscaled)
+            epoch_upscaler_loss += upscaler_loss.item()
+            # upscaler_loss.backward()
+            # torch.nn.utils.clip_grad_norm_(model.upscaler.parameters(), max_norm=1.0)
+            # optimizer.step()
 
-            loss = nn.MSELoss()(y, gt_upscaled)
+            loss = COLORIZER_WEIGHT * colorizer_loss + UPSCALER_WEIGHT * upscaler_loss
             epoch_train_loss += loss.item()
+
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -126,47 +168,65 @@ if __name__ == "__main__":
 
             if WANDB_LOG:
                 wandb.log({
+                    "colorizer_loss": colorizer_loss.item(),
+                    "upscaler_loss": upscaler_loss.item(),
                     "train_loss": loss.item(),
+                    "avg_colorizer_loss": epoch_colorizer_loss / batch_count,
+                    "avg_upscaler_loss": epoch_upscaler_loss / batch_count,
                     "avg_train_loss": epoch_train_loss / batch_count,
                 })
 
-            pbar.set_postfix_str(f"Avg Train Loss: {epoch_train_loss / batch_count:.4f}")
+            pbar.set_postfix_str(f"Colorizer Loss: {epoch_colorizer_loss / batch_count:.4f}, Upscaler Loss: {epoch_upscaler_loss / batch_count:.4f}, Avg Loss: {epoch_train_loss / batch_count:.4f}")
 
             # Every 10k batches, compute validation loss
             if batch_count % VAL_FREQUENCY == 0:
                 model.eval()
-                avg_val_loss    = 0.0
-                val_batch_count = 0
-
-                noisy_val_dataset.dataset = noisy_val_dataset.dataset.shuffle()
-                val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
+                avg_colorizer_loss = 0.0
+                avg_upscaler_loss  = 0.0
+                avg_val_loss       = 0.0
+                val_batch_count    = 0
 
                 with torch.no_grad():
                     for val_batch in val_dataloader:
                         val_denoised_gray = val_batch['denoised_gray'].to(DEVICE)
                         val_original_rgb  = val_batch['original_rgb'].to(DEVICE)
 
-                        val_y  = model(val_denoised_gray, val_original_rgb)
-                        val_gt = F.interpolate(
+                        val_uv, val_upscaled = model(val_denoised_gray)
+
+                        val_yuv = rgb_to_yuv(val_original_rgb)
+                        val_colorizer_loss = nn.MSELoss()(val_uv, val_yuv[:, 1:])
+
+                        val_gt_upscaled = F.interpolate(
                             val_original_rgb,
                             size=(2160, 4096),
                             mode="bilinear",
                             align_corners=False
                         )
+                        val_upscaler_loss = nn.MSELoss()(val_upscaled, val_gt_upscaled)
 
-                        val_loss = nn.MSELoss()(val_y, val_gt)
+                        val_loss = COLORIZER_WEIGHT * val_colorizer_loss + UPSCALER_WEIGHT * val_upscaler_loss
+
+                        avg_colorizer_loss += val_colorizer_loss.item()
+                        avg_upscaler_loss += val_upscaler_loss.item()
                         avg_val_loss += val_loss.item()
 
                         val_batch_count += 1
-                        if val_batch_count >= MAX_VAL_BATCHES:
-                            break
 
+                avg_colorizer_loss = avg_colorizer_loss / val_batch_count if val_batch_count > 0 else float('inf')
+                avg_upscaler_loss = avg_upscaler_loss / val_batch_count if val_batch_count > 0 else float('inf')
                 avg_val_loss = avg_val_loss / val_batch_count if val_batch_count > 0 else float('inf')
 
                 if WANDB_LOG:
-                    wandb.log({"val_loss": avg_val_loss})
+                    wandb.log({
+                        "val_colorizer_loss": avg_colorizer_loss,
+                        "val_upscaler_loss": avg_upscaler_loss,
+                        "val_loss": avg_val_loss
+                    })
 
-                print(f"Validation Loss after {batch_count} batches: {avg_val_loss:.4f}")
+                print(f"Validation losses after {batch_count} batches:")
+                print(f"\tColorizer Loss: {val_colorizer_loss:.4f}")
+                print(f"\tUpscaler Loss: {val_upscaler_loss:.4f}")
+                print(f"\tAvg Loss: {avg_val_loss:.4f}")
 
                 scheduler.step(avg_val_loss)
 
