@@ -114,10 +114,6 @@ class NoisyImageNetDataset(IterableDataset):
 
             denoised_image_tensor = torch.FloatTensor(denoised_image).unsqueeze(0)
             image_gray_tensor = torch.FloatTensor(image_gray).unsqueeze(0)  
-            
-            mean = 0.485
-            std = 0.229
-            image_gray_tensor = (image_gray_tensor - mean) / std
 
             yield {
                 'original_rgb': original_rgb_tensor,

@@ -8,15 +8,14 @@ from tqdm import tqdm
 from kornia.color import yuv_to_rgb, rgb_to_yuv
 from kornia.feature import DenseSIFTDescriptor
 from kornia.filters import joint_bilateral_blur
-
+from torchvision import transforms as T
 import torchvision.models as models
 
 class ResNetFeatureExtractor(nn.Module):
     """Feature extractor using a pre-trained ResNet with intermediate layers."""
     def __init__(self):
         super().__init__()
-        resnet = models.resnet18(pretrained=True)
-
+        resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         self.init_layer = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool)  # Output: 64x56x56
         self.layer1 = resnet.layer1  # Output: 64x56x56
         self.layer2 = resnet.layer2  # Output: 128x28x28
@@ -32,7 +31,9 @@ class ResNetFeatureExtractor(nn.Module):
         Returns:
             A dictionary containing intermediate feature maps.
         """
-
+        mean_tensor = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(x.device)
+        std_tensor = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(x.device)
+        x = (x - mean_tensor) / std_tensor
         res_init = self.init_layer(x)
         res1 = self.layer1(res_init)
         res2 = self.layer2(res1)

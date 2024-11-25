@@ -49,7 +49,7 @@ if __name__ == "__main__":
     WANDB_LOG          = True
     CACHE_DIR          = "/scratch/swayam/other_stuff/DIP/ImageNet-1k/"
     NUM_EPOCHS         = 1
-    BATCH_SIZE         = 32
+    BATCH_SIZE         = 64
     WEIGHT_DECAY       = 1e-2
     VAL_FREQUENCY      = 250
     MAX_VAL_BATCHES    = 50
@@ -69,7 +69,7 @@ if __name__ == "__main__":
 
     train_dataset = load_dataset(
         'imagenet-1k', split='train', streaming=True,
-        cache_dir=CACHE_DIR, trust_remote_code=True
+        cache_dir=CACHE_DIR, trust_remote_code=True,
     ).shuffle()
     noisy_train_dataset = NoisyImageNetDataset(train_dataset)
     train_dataloader = DataLoader(noisy_train_dataset, batch_size=BATCH_SIZE, num_workers=5)
