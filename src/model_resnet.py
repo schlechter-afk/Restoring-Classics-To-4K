@@ -16,7 +16,7 @@ from datasets import load_dataset
 from kornia.color import yuv_to_rgb, rgb_to_yuv
 
 from upscaler import Upscaler
-from colorizer_resnet import Colorizer
+from main_model import Colorizer
 from dataloader_resnet import NoisyImageNetDataset
 
 class Restorer(nn.Module):
