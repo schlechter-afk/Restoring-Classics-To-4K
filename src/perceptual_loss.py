@@ -33,7 +33,6 @@ class PerceptualLoss(nn.Module):
         else:
             self.weights = weights
 
-    @torch.no_grad()
     def forward(self, input_img, target_img):
 
         # normalize input and target images
@@ -53,7 +52,6 @@ class PerceptualLoss(nn.Module):
 
         return perceptual_loss
 
-    @torch.no_grad()
     def get_features(self, x):
         features = {}
         for name, layer in self.vgg_layers._modules.items():

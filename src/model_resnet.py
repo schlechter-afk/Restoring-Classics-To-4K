@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
     # Define weighting factors
     MSE_WEIGHT = 1.0
-    PERCEPTUAL_WEIGHT = 0.001  # Adjust this based on experiments
+    PERCEPTUAL_WEIGHT = 0.0005  # Adjust this based on experiments
 
     if WANDB_LOG:
         wandb.init(project="RestoringClassicsGlory", name=WANDB_RUN_NAME)
@@ -162,7 +162,17 @@ if __name__ == "__main__":
 
                         val_uv_channels = model(val_denoised_gray)
                         val_yuv = rgb_to_yuv(val_original_rgb)
-                        val_loss = nn.MSELoss()(val_uv_channels, val_yuv[:, 1:])
+                        # val_loss = nn.MSELoss()(val_uv_channels, val_yuv[:, 1:])
+                        # avg_val_loss += val_loss.item()
+
+                        val_pred_yuv = torch.cat([val_denoised_gray, val_uv_channels], dim=1)
+                        val_pred_rgb = yuv_to_rgb(val_pred_yuv)
+
+                        val_perceptual_loss = perceptual_loss_fn(val_pred_rgb, val_original_rgb)
+
+                        val_mse_loss = nn.MSELoss()(val_uv_channels, val_yuv[:, 1:])
+                        val_loss = MSE_WEIGHT * val_mse_loss + PERCEPTUAL_WEIGHT * val_perceptual_loss
+
                         avg_val_loss += val_loss.item()
 
                         val_batch_count += 1
