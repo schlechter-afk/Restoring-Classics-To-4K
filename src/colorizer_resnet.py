@@ -64,28 +64,28 @@ class Colorizer(nn.Module):
             nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # 7x7 -> 14x14
             nn.GroupNorm(32, 256),
             nn.ReLU(),
-            nn.Dropout(p=0.3)
+            nn.Dropout(p=0.4)
         )
 
         self.decoder2 = nn.Sequential(
             nn.ConvTranspose2d(256 + 256, 128, kernel_size=4, stride=2, padding=1),  # 14x14 -> 28x28
             nn.GroupNorm(32, 128),
             nn.ReLU(),
-            nn.Dropout(p=0.3)
+            nn.Dropout(p=0.4)
         )
 
         self.decoder3 = nn.Sequential(
             nn.ConvTranspose2d(128 + 128, 64, kernel_size=4, stride=2, padding=1),  # 28x28 -> 56x56
             nn.GroupNorm(32, 64),
             nn.ReLU(),
-            nn.Dropout(p=0.3)
+            nn.Dropout(p=0.4)
         )
 
         self.decoder4 = nn.Sequential(
             nn.ConvTranspose2d(64 + 64, 32, kernel_size=4, stride=2, padding=1),  # 56x56 -> 112x112
             nn.GroupNorm(16, 32),
             nn.ReLU(),
-            nn.Dropout(p=0.3)
+            nn.Dropout(p=0.4)
         )
 
         self.final_layer = nn.ConvTranspose2d(32, 2, kernel_size=4, stride=2, padding=1)  # 112x112 -> 224x224
