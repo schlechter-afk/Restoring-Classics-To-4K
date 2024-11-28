@@ -17,6 +17,7 @@ from kornia.feature import SIFTDescriptor
 from kornia.filters import joint_bilateral_blur
 from kornia.color import yuv_to_rgb, rgb_to_yuv
 
+from dataloader_imagenet import ImageNetDataset
 from dataloader_resnet import NoisyImageNetDataset
 
 class Colorizer(nn.Module):
@@ -118,13 +119,13 @@ class Colorizer(nn.Module):
 
         x = self.final_layer(x)  # (batch_size, 2, 224, 224)
 
-        x = joint_bilateral_blur(
-            input=x,
-            guidance=original_x.repeat(1, 2, 1, 1),
-            kernel_size=self.kernel_size,
-            sigma_color=self.sigma_color,
-            sigma_space=self.sigma_space
-        )  # (batch_size, 2, 270, 512)
+        # x = joint_bilateral_blur(
+        #     input=x,
+        #     guidance=original_x.repeat(1, 2, 1, 1),
+        #     kernel_size=self.kernel_size,
+        #     sigma_color=self.sigma_color,
+        #     sigma_space=self.sigma_space
+        # )  # (batch_size, 2, 270, 512)
 
         u_max = 0.436
         v_max = 0.615
@@ -163,7 +164,7 @@ if __name__ == "__main__":
     SCHEDULER_PATIENCE = 2
     COLORIZER_WEIGHT   = 0.75
     UPSCALER_WEIGHT    = 1 - COLORIZER_WEIGHT
-    WANDB_RUN_NAME     = f"sift_colorizer_with_JBF_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}"
+    WANDB_RUN_NAME     = f"noiseless_sift_colorizer_without_JBF_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}"
     CHECKPOINT_DIR     = "/scratch/public_scratch/gp/DIP/checkpoints/"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -175,18 +176,21 @@ if __name__ == "__main__":
     # You will have to paste the API key from https://huggingface.co/settings/tokens
     # This is needed to access the gated ImageNet dataset
 
-    train_dataset = load_dataset(
-        'imagenet-1k', split='train', streaming=True,
-        cache_dir=CACHE_DIR, trust_remote_code=True
-    ).shuffle()
-    noisy_train_dataset = NoisyImageNetDataset(train_dataset)
+    # train_dataset = load_dataset(
+    #     'imagenet-1k', split='train', streaming=True,
+    #     cache_dir=CACHE_DIR, trust_remote_code=True
+    # ).shuffle()
+    # noisy_train_dataset = NoisyImageNetDataset(train_dataset)
+    train_dataset = ImageNetDataset('train', cache_dir=CACHE_DIR)
 
-    val_dataset = load_dataset(
-        'imagenet-1k', split='validation', streaming=True,
-        cache_dir=CACHE_DIR, trust_remote_code=True
-    )
-    noisy_val_dataset = NoisyImageNetDataset(val_dataset)
-    val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
+    # val_dataset = load_dataset(
+    #     'imagenet-1k', split='validation', streaming=True,
+    #     cache_dir=CACHE_DIR, trust_remote_code=True
+    # )
+    # noisy_val_dataset = NoisyImageNetDataset(val_dataset)
+    # val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
+    val_dataset = ImageNetDataset('validation', cache_dir=CACHE_DIR)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, num_workers=1)
 
     best_val_loss = float('inf')
 
@@ -202,9 +206,12 @@ if __name__ == "__main__":
         batch_count = 0
         epoch_colorizer_loss = 0.0
 
+        # train_dataset.set_epoch(epoch)
+        # noisy_train_dataset.dataset = train_dataset
+        # train_dataloader = DataLoader(noisy_train_dataset, batch_size=BATCH_SIZE, num_workers=5)
+
         train_dataset.set_epoch(epoch)
-        noisy_train_dataset.dataset = train_dataset
-        train_dataloader = DataLoader(noisy_train_dataset, batch_size=BATCH_SIZE, num_workers=5)
+        train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, num_workers=5)
 
         pbar = tqdm(train_dataloader, total=NUM_TRAIN_BATCHES)
         for batch in pbar:
@@ -223,7 +230,7 @@ if __name__ == "__main__":
             colorizer_loss = nn.MSELoss()(uv_channels, original_yuv[:, 1:])
             epoch_colorizer_loss += colorizer_loss.item()
 
-            colorizer_loss.backward(retain_graph=True)
+            colorizer_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 

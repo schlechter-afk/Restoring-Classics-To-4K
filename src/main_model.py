@@ -16,6 +16,7 @@ from datasets import load_dataset
 from kornia.filters import joint_bilateral_blur
 from kornia.color import yuv_to_rgb, rgb_to_yuv
 
+from dataloader_imagenet import ImageNetDataset
 from dataloader_resnet import NoisyImageNetDataset
 
 class ResNetFeatureExtractor(nn.Module):
@@ -139,22 +140,21 @@ class Colorizer(nn.Module):
 
         x = self.final_layer(x)                  # Input: 32x112x112 -> Output: 2x224x224 (UV channels)
 
-        # uv = joint_bilateral_blur(
+        # x = joint_bilateral_blur(
         #     input=x,
         #     guidance=x_original.repeat(1, 2, 1, 1),  # Repeat grayscale for guidance
         #     kernel_size=self.kernel_size,
         #     sigma_color=self.sigma_color,
         #     sigma_space=self.sigma_space
         # )
-        uv = x
 
         # Scale UV channels to proper range
         u_max = 0.436
         v_max = 0.615
-        scale_tensor = torch.tensor([u_max, v_max], device=uv.device).view(1, 2, 1, 1)
-        uv = torch.tanh(uv) * scale_tensor
+        scale_tensor = torch.tensor([u_max, v_max], device=x.device).view(1, 2, 1, 1)
+        x = torch.tanh(x) * scale_tensor
 
-        return uv
+        return x
 
     @staticmethod
     def uv_to_rgb(y: torch.Tensor, uv: torch.Tensor) -> torch.Tensor:
@@ -184,7 +184,7 @@ if __name__ == "__main__":
     SCHEDULER_PATIENCE = 2
     COLORIZER_WEIGHT   = 0.75
     UPSCALER_WEIGHT    = 1 - COLORIZER_WEIGHT
-    WANDB_RUN_NAME     = f"resnet_colorizer_without_JBF_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}"
+    WANDB_RUN_NAME     = f"noiseless_resnet_colorizer_without_JBF_{LR}_{WEIGHT_DECAY}_{VAL_FREQUENCY}"
     CHECKPOINT_DIR     = "/scratch/public_scratch/gp/DIP/checkpoints/"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -196,18 +196,21 @@ if __name__ == "__main__":
     # You will have to paste the API key from https://huggingface.co/settings/tokens
     # This is needed to access the gated ImageNet dataset
 
-    train_dataset = load_dataset(
-        'imagenet-1k', split='train', streaming=True,
-        cache_dir=CACHE_DIR, trust_remote_code=True
-    ).shuffle()
-    noisy_train_dataset = NoisyImageNetDataset(train_dataset)
+    # train_dataset = load_dataset(
+    #     'imagenet-1k', split='train', streaming=True,
+    #     cache_dir=CACHE_DIR, trust_remote_code=True
+    # ).shuffle()
+    # noisy_train_dataset = NoisyImageNetDataset(train_dataset)
+    train_dataset = ImageNetDataset('train', cache_dir=CACHE_DIR)
 
-    val_dataset = load_dataset(
-        'imagenet-1k', split='validation', streaming=True,
-        cache_dir=CACHE_DIR, trust_remote_code=True
-    )
-    noisy_val_dataset = NoisyImageNetDataset(val_dataset)
-    val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
+    # val_dataset = load_dataset(
+    #     'imagenet-1k', split='validation', streaming=True,
+    #     cache_dir=CACHE_DIR, trust_remote_code=True
+    # )
+    # noisy_val_dataset = NoisyImageNetDataset(val_dataset)
+    # val_dataloader = DataLoader(noisy_val_dataset, batch_size=BATCH_SIZE, num_workers=1)
+    val_dataset = ImageNetDataset('validation', cache_dir=CACHE_DIR)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, num_workers=1)
 
     best_val_loss = float('inf')
 
@@ -223,9 +226,12 @@ if __name__ == "__main__":
         batch_count = 0
         epoch_colorizer_loss = 0.0
 
+        # train_dataset.set_epoch(epoch)
+        # noisy_train_dataset.dataset = train_dataset
+        # train_dataloader = DataLoader(noisy_train_dataset, batch_size=BATCH_SIZE, num_workers=5)
+
         train_dataset.set_epoch(epoch)
-        noisy_train_dataset.dataset = train_dataset
-        train_dataloader = DataLoader(noisy_train_dataset, batch_size=BATCH_SIZE, num_workers=5)
+        train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, num_workers=5)
 
         pbar = tqdm(train_dataloader, total=NUM_TRAIN_BATCHES)
         for batch in pbar:
@@ -244,7 +250,7 @@ if __name__ == "__main__":
             colorizer_loss = nn.MSELoss()(uv_channels, original_yuv[:, 1:])
             epoch_colorizer_loss += colorizer_loss.item()
 
-            colorizer_loss.backward(retain_graph=True)
+            colorizer_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
